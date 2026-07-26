@@ -32,6 +32,7 @@ jobs:
         run: |
           python3 patch_hmi_26_2.py
           python3 patch_hmi_26_2_redirects.py
+          python3 patch_hmi_26_2_camera.py
       - name: Build
         working-directory: hmi-source/mod
         run: |
@@ -58,7 +59,7 @@ jobs:
       - name: Upload JAR
         uses: actions/upload-artifact@v4
         with:
-          name: holdmyitems-5.1.1-mc26.2-runtime-fix2
+          name: holdmyitems-5.1.1-mc26.2-runtime-fix3
           path: hmi-source/mod/build/libs/*.jar
           if-no-files-found: error
       - name: Upload smoke log
