@@ -1,4 +1,4 @@
-name: Build HMI 26.2 Runtime Fix
+name: Build HMI 26.2 Animation Fix
 
 on:
   pull_request:
@@ -24,7 +24,7 @@ jobs:
           sed -i 's/^minecraft_version=.*/minecraft_version=26.2/' hmi-source/mod/gradle.properties
           sed -i 's/^loader_version=.*/loader_version=0.19.3/' hmi-source/mod/gradle.properties
           sed -i 's/^loom_version=.*/loom_version=1.17.17/' hmi-source/mod/gradle.properties
-          sed -i 's/^mod_version=.*/mod_version=5.1.1+26.2-unofficial/' hmi-source/mod/gradle.properties
+          sed -i 's/^mod_version=.*/mod_version=5.1.1+26.2-animationfix/' hmi-source/mod/gradle.properties
           sed -i 's/^fabric_api_version=.*/fabric_api_version=0.154.2+26.2/' hmi-source/mod/gradle.properties
           sed -i 's#^distributionUrl=.*#distributionUrl=https\://services.gradle.org/distributions-snapshots/gradle-9.5.1-20260510022507+0000-bin.zip#' hmi-source/mod/gradle/wrapper/gradle-wrapper.properties
           sed -i 's/"minecraft": "~26\.1\.2"/"minecraft": "~26.2"/' hmi-source/mod/src/main/resources/fabric.mod.json
@@ -34,11 +34,20 @@ jobs:
           python3 patch_hmi_26_2_redirects.py
           python3 patch_hmi_26_2_camera.py
           python3 patch_hmi_26_2_mixins.py
+          python3 patch_hmi_26_2_animations.py
       - name: Build
         working-directory: hmi-source/mod
         run: |
           chmod +x gradlew
           ./gradlew clean build --stacktrace --console=plain
+      - name: Verify animation patches
+        working-directory: hmi-source/mod
+        shell: bash
+        run: |
+          javap -classpath build/classes/java/main -p -c com.holdmylua.source.mixin.client.GameRendererMixin > ../../animation-bytecode.txt
+          javap -classpath build/classes/java/main -p -c com.holdmylua.source.mixin.render.HeldItemRendererMixin >> ../../animation-bytecode.txt
+          grep -q 'java/lang/System.nanoTime' ../../animation-bytecode.txt
+          grep -q 'java/lang/Math.max' ../../animation-bytecode.txt
       - name: Smoke test client startup
         working-directory: hmi-source/mod
         shell: bash
@@ -60,13 +69,15 @@ jobs:
       - name: Upload JAR
         uses: actions/upload-artifact@v4
         with:
-          name: holdmyitems-5.1.1-mc26.2-runtime-fix4
+          name: holdmyitems-5.1.1-mc26.2-animationfix
           path: hmi-source/mod/build/libs/*.jar
           if-no-files-found: error
       - name: Upload smoke log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: holdmyitems-26.2-smoke-log
-          path: client-smoke.log
+          name: holdmyitems-26.2-animation-smoke-log
+          path: |
+            client-smoke.log
+            animation-bytecode.txt
           if-no-files-found: warn
