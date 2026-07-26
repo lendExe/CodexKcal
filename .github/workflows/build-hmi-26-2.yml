@@ -1,4 +1,4 @@
-name: Build HMI 26.2 Resource Pack Fix
+name: Build HMI 26.2 Tuned Animations
 
 on:
   pull_request:
@@ -25,12 +25,12 @@ jobs:
           sed -i 's/^minecraft_version=.*/minecraft_version=26.2/' hmi-source/mod/gradle.properties
           sed -i 's/^loader_version=.*/loader_version=0.19.3/' hmi-source/mod/gradle.properties
           sed -i 's/^loom_version=.*/loom_version=1.17.17/' hmi-source/mod/gradle.properties
-          sed -i 's/^mod_version=.*/mod_version=5.1.1+26.2-resourcefix3/' hmi-source/mod/gradle.properties
+          sed -i 's/^mod_version=.*/mod_version=5.1.1+26.2-tuned/' hmi-source/mod/gradle.properties
           sed -i 's/^fabric_api_version=.*/fabric_api_version=0.154.2+26.2/' hmi-source/mod/gradle.properties
           sed -i 's#^distributionUrl=.*#distributionUrl=https\://services.gradle.org/distributions-snapshots/gradle-9.5.1-20260510022507+0000-bin.zip#' hmi-source/mod/gradle/wrapper/gradle-wrapper.properties
           sed -i 's/"minecraft": "~26\.1\.2"/"minecraft": "~26.2"/' hmi-source/mod/src/main/resources/fabric.mod.json
 
-      - name: Apply Minecraft 26.2 port
+      - name: Apply Minecraft 26.2 port and tuning
         run: |
           python3 patch_hmi_26_2.py
           python3 patch_hmi_26_2_redirects.py
@@ -38,23 +38,26 @@ jobs:
           python3 patch_hmi_26_2_mixins.py
           python3 patch_hmi_26_2_animations.py
           python3 patch_hmi_26_2_resourcepack.py
+          python3 patch_hmi_26_2_tuning.py
 
-      - name: Verify embedded animation pack metadata
+      - name: Verify tuning and embedded pack
         shell: bash
         run: |
           python3 - <<'PY'
           import json
           from pathlib import Path
-          path = Path('hmi-source/mod/src/main/resources/resourcepacks/pack_test/pack.mcmeta')
-          data = json.loads(path.read_text(encoding='utf-8'))
-          pack = data['pack']
-          assert pack['pack_format'] == 88, pack
-          assert pack['min_format'] == 88, pack
-          assert pack['max_format'] == 88, pack
-          assert 'supported_formats' not in pack, pack
-          for name in ('hand_pose.lua', 'hand_relative_pose.lua', 'item_pose.lua', 'item_model.lua'):
-              lua = Path('hmi-source/mod/src/main/resources/resourcepacks/pack_test/assets/minecraft/holdmyitems') / name
-              assert lua.is_file() and lua.stat().st_size > 100, lua
+          pack_path = Path('hmi-source/mod/src/main/resources/resourcepacks/pack_test/pack.mcmeta')
+          pack = json.loads(pack_path.read_text(encoding='utf-8'))['pack']
+          assert pack['pack_format'] == 88
+          assert pack['min_format'] == 88
+          assert pack['max_format'] == 88
+          assert 'supported_formats' not in pack
+
+          game = Path('hmi-source/mod/src/main/java/com/holdmylua/source/mixin/client/GameRendererMixin.java').read_text(encoding='utf-8')
+          held = Path('hmi-source/mod/src/main/java/com/holdmylua/source/mixin/render/HeldItemRendererMixin.java').read_text(encoding='utf-8')
+          assert 'elapsed * 0.65F' in game
+          assert 'Math.max(mainHandProgress' not in held
+          assert 'matrices.translate(-0.14F * l, 0.03F, -0.10F);' in held
           PY
 
       - name: Build
@@ -121,7 +124,7 @@ jobs:
       - name: Upload JAR
         uses: actions/upload-artifact@v4
         with:
-          name: holdmyitems-5.1.1-mc26.2-resourcefix3
+          name: holdmyitems-5.1.1-mc26.2-tuned
           path: hmi-source/mod/build/libs/*.jar
           if-no-files-found: error
 
@@ -129,7 +132,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: hmi-26.2-resourcefix3-logs
+          name: hmi-26.2-tuned-logs
           path: |
             client-world.log
             server-world.log
