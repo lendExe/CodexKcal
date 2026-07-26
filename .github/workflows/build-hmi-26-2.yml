@@ -1,4 +1,4 @@
-name: Build HMI 26.2 Animation Fix
+name: Diagnose HMI 26.2 In-World Animations
 
 on:
   pull_request:
@@ -18,37 +18,67 @@ jobs:
         with:
           distribution: temurin
           java-version: '25'
+
       - name: Configure Minecraft 26.2
         shell: bash
         run: |
           sed -i 's/^minecraft_version=.*/minecraft_version=26.2/' hmi-source/mod/gradle.properties
           sed -i 's/^loader_version=.*/loader_version=0.19.3/' hmi-source/mod/gradle.properties
           sed -i 's/^loom_version=.*/loom_version=1.17.17/' hmi-source/mod/gradle.properties
-          sed -i 's/^mod_version=.*/mod_version=5.1.1+26.2-animationfix/' hmi-source/mod/gradle.properties
+          sed -i 's/^mod_version=.*/mod_version=5.1.1+26.2-worldtest/' hmi-source/mod/gradle.properties
           sed -i 's/^fabric_api_version=.*/fabric_api_version=0.154.2+26.2/' hmi-source/mod/gradle.properties
           sed -i 's#^distributionUrl=.*#distributionUrl=https\://services.gradle.org/distributions-snapshots/gradle-9.5.1-20260510022507+0000-bin.zip#' hmi-source/mod/gradle/wrapper/gradle-wrapper.properties
           sed -i 's/"minecraft": "~26\.1\.2"/"minecraft": "~26.2"/' hmi-source/mod/src/main/resources/fabric.mod.json
-      - name: Apply source port
+
+      - name: Apply source port and diagnostics
         run: |
           python3 patch_hmi_26_2.py
           python3 patch_hmi_26_2_redirects.py
           python3 patch_hmi_26_2_camera.py
           python3 patch_hmi_26_2_mixins.py
           python3 patch_hmi_26_2_animations.py
+          python3 patch_hmi_26_2_lua_debug.py
+
       - name: Build
         working-directory: hmi-source/mod
         run: |
           chmod +x gradlew
           ./gradlew clean build --stacktrace --console=plain
-      - name: Verify animation patches
-        working-directory: hmi-source/mod
+
+      - name: Generate vanilla 26.2 test world
         shell: bash
         run: |
-          javap -classpath build/classes/java/main -p -c com.holdmylua.source.mixin.client.GameRendererMixin > ../../animation-bytecode.txt
-          javap -classpath build/classes/java/main -p -c com.holdmylua.source.mixin.render.HeldItemRendererMixin >> ../../animation-bytecode.txt
-          grep -q 'java/lang/System.nanoTime' ../../animation-bytecode.txt
-          grep -q 'java/lang/Math.max' ../../animation-bytecode.txt
-      - name: Smoke test client startup
+          mkdir -p /tmp/hmi-server
+          python3 - <<'PY'
+          import json
+          import urllib.request
+
+          manifest_url = 'https://piston-meta.mojang.com/mc/game/version_manifest_v2.json'
+          with urllib.request.urlopen(manifest_url) as response:
+              manifest = json.load(response)
+          entry = next(v for v in manifest['versions'] if v['id'] == '26.2')
+          with urllib.request.urlopen(entry['url']) as response:
+              metadata = json.load(response)
+          urllib.request.urlretrieve(metadata['downloads']['server']['url'], '/tmp/hmi-server/server.jar')
+          PY
+          cd /tmp/hmi-server
+          printf 'eula=true\n' > eula.txt
+          cat > server.properties <<'EOF'
+          level-name=AnimationTest
+          online-mode=false
+          spawn-protection=0
+          view-distance=4
+          simulation-distance=4
+          max-players=1
+          enable-command-block=false
+          EOF
+          set +e
+          (sleep 45; echo stop) | timeout 100s java -Xms512M -Xmx1G -jar server.jar nogui 2>&1 | tee "$GITHUB_WORKSPACE/server-world.log"
+          test -f AnimationTest/level.dat
+          mkdir -p "$GITHUB_WORKSPACE/hmi-source/mod/run/saves"
+          cp -a AnimationTest "$GITHUB_WORKSPACE/hmi-source/mod/run/saves/AnimationTest"
+
+      - name: In-world client animation test
         working-directory: hmi-source/mod
         shell: bash
         run: |
@@ -56,28 +86,31 @@ jobs:
           sudo apt-get install -y -qq xvfb
           set +e
           set -o pipefail
-          timeout 180s xvfb-run -a ./gradlew runClient --console=plain 2>&1 | tee ../../client-smoke.log
+          timeout 240s xvfb-run -a ./gradlew runClient --args='--quickPlaySingleplayer AnimationTest' --console=plain 2>&1 | tee ../../client-world.log
           status=${PIPESTATUS[0]}
-          if grep -E -q 'InvalidMixinException|InvalidInjectionException|MixinApplyError|Mixin transformation.*failed|ExceptionInInitializerError|Minecraft has crashed' ../../client-smoke.log; then
-            cat ../../client-smoke.log
+          if grep -E -q '\[HoldMyItems\] Lua runtime error|InvalidMixinException|InvalidInjectionException|MixinApplyError|Mixin transformation.*failed|ExceptionInInitializerError|Minecraft has crashed' ../../client-world.log; then
+            cat ../../client-world.log
             exit 1
           fi
           if [ "$status" -ne 0 ] && [ "$status" -ne 124 ]; then
-            cat ../../client-smoke.log
+            cat ../../client-world.log
             exit "$status"
           fi
-      - name: Upload JAR
-        uses: actions/upload-artifact@v4
-        with:
-          name: holdmyitems-5.1.1-mc26.2-animationfix
-          path: hmi-source/mod/build/libs/*.jar
-          if-no-files-found: error
-      - name: Upload smoke log
+
+      - name: Upload diagnostic logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: holdmyitems-26.2-animation-smoke-log
+          name: hmi-26.2-in-world-diagnostics
           path: |
-            client-smoke.log
-            animation-bytecode.txt
+            client-world.log
+            server-world.log
           if-no-files-found: warn
+
+      - name: Upload diagnostic JAR
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: holdmyitems-5.1.1-mc26.2-worldtest
+          path: hmi-source/mod/build/libs/*.jar
+          if-no-files-found: error
