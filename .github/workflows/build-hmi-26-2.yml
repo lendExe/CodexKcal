@@ -34,17 +34,32 @@ jobs:
           sed -i 's/^fabric_api_version=.*/fabric_api_version=0.154.2+26.2/' hmi-source/mod/gradle.properties
           grep -E '^(minecraft|loader|loom|mod|fabric_api)_version=' hmi-source/mod/gradle.properties
 
-      - name: Build
+      - name: Build and capture diagnostics
+        id: build
+        continue-on-error: true
         working-directory: hmi-source/mod
         shell: bash
         run: |
           chmod +x gradlew
-          ./gradlew clean build --stacktrace --console=plain
-          ls -lah build/libs
+          set -o pipefail
+          ./gradlew clean build --stacktrace --console=plain 2>&1 | tee build/hmi-build.log
+
+      - name: Upload build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hmi-26.2-build-log
+          path: hmi-source/mod/build/hmi-build.log
+          if-no-files-found: error
 
       - name: Upload built jar
+        if: steps.build.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: holdmyitems-26.2
           path: hmi-source/mod/build/libs/*.jar
           if-no-files-found: error
+
+      - name: Fail when compilation failed
+        if: steps.build.outcome != 'success'
+        run: exit 1
