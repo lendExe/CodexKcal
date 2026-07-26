@@ -1,4 +1,4 @@
-name: Inspect HMI 26.2 Render APIs
+name: Inspect HMI 26.2 Render APIs Fast
 
 on:
   pull_request:
@@ -18,7 +18,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '25'
-      - name: Configure 26.2 toolchain
+      - name: Configure and generate sources
         shell: bash
         run: |
           sed -i 's/^minecraft_version=.*/minecraft_version=26.2/' hmi-source/mod/gradle.properties
@@ -26,48 +26,36 @@ jobs:
           sed -i 's/^loom_version=.*/loom_version=1.17.17/' hmi-source/mod/gradle.properties
           sed -i 's/^fabric_api_version=.*/fabric_api_version=0.154.2+26.2/' hmi-source/mod/gradle.properties
           sed -i 's#^distributionUrl=.*#distributionUrl=https\\://services.gradle.org/distributions-snapshots/gradle-9.5.1-20260510022507+0000-bin.zip#' hmi-source/mod/gradle/wrapper/gradle-wrapper.properties
-      - name: Generate focused render API report
-        working-directory: hmi-source/mod
-        shell: bash
-        run: |
+          cd hmi-source/mod
           chmod +x gradlew
           ./gradlew genSources --console=plain
+      - name: Extract exact relevant sources
+        shell: bash
+        run: |
           python3 - <<'PY'
-          import os, zipfile, re
-          out=[]
-          patterns=[
-            r'BufferSource', r'Outline', r'ItemFeatureRenderer', r'ItemSubmit',
-            r'SubmitNodeStorage', r'BlendFunction', r'RenderPipeline',
-            r'VertexFormat', r'RenderType', r'Foil'
-          ]
-          content_tokens=['BufferSource','outlineColor','foilType','foil','ItemSubmit','SubmitNode','BlendFunction','withBindGroup','BindGroupLayouts','VertexFormat.Mode','DrawMode']
-          for root in ['.', os.path.expanduser('~/.gradle')]:
-            for base, _, files in os.walk(root):
-              for fn in files:
-                p=os.path.join(base,fn)
-                if not fn.endswith(('.jar','.zip')) or ('source' not in fn.lower() and 'minecraft' not in p.lower()):
-                  continue
-                try:
-                  with zipfile.ZipFile(p) as z:
-                    names=[n for n in z.namelist() if n.endswith('.java')]
-                    chosen=[]
-                    for n in names:
-                      name_hit=any(re.search(x,n,re.I) for x in patterns)
-                      if name_hit:
-                        chosen.append(n); continue
-                      txt=z.read(n).decode('utf-8','ignore')
-                      if any(tok in txt for tok in content_tokens): chosen.append(n)
-                    for n in sorted(set(chosen)):
-                      txt=z.read(n).decode('utf-8','ignore')
-                      out.append(f'\n===== {p} :: {n} =====\n{txt}')
-                except Exception:
-                  pass
-          open('../../hmi-render-api-report.txt','w',encoding='utf-8').write('\n'.join(out))
-          print('entries',len(out))
+          import glob, zipfile, re
+          jars=glob.glob('hmi-source/mod/.gradle/loom-cache/**/26.2/*-sources.jar',recursive=True)
+          if not jars: raise SystemExit('sources jar not found')
+          jar=jars[0]
+          print('using',jar)
+          with zipfile.ZipFile(jar) as z:
+            names=[n for n in z.namelist() if n.endswith('.java')]
+            needles=['BufferSource','Outline','ItemFeatureRenderer','ItemSubmit','SubmitNodeStorage','BlendFunction','RenderPipeline','VertexFormat','RenderType','Foil']
+            selected=[]
+            for n in names:
+              base=n.rsplit('/',1)[-1]
+              if any(x.lower() in base.lower() for x in needles): selected.append(n); continue
+              txt=z.read(n).decode('utf-8','ignore')
+              if any(x in txt for x in ['outlineColor()', 'foilType()', 'putBakedQuad', 'getFoil', 'withBindGroup', 'BlendFunction(', 'enum Mode']):
+                selected.append(n)
+            with open('hmi-render-api-report.txt','w',encoding='utf-8') as f:
+              for n in sorted(set(selected)):
+                f.write(f'\n===== {n} =====\n')
+                f.write(z.read(n).decode('utf-8','ignore'))
+          print('selected',len(set(selected)))
           PY
-      - name: Upload render API report
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: hmi-26.2-render-api-report
+          name: hmi-26.2-render-api-report-fast
           path: hmi-render-api-report.txt
           if-no-files-found: error
