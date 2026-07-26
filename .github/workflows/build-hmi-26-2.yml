@@ -1,4 +1,4 @@
-name: Build HMI 26.2
+name: Inspect HMI 26.2 Item Renderer
 
 on:
   pull_request:
@@ -10,67 +10,40 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/checkout@v4
         with:
           repository: ByteMe6/HMI-26.1.2
           path: hmi-source
-
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '25'
-
       - name: Configure Minecraft 26.2
         shell: bash
         run: |
           sed -i 's/^minecraft_version=.*/minecraft_version=26.2/' hmi-source/mod/gradle.properties
           sed -i 's/^loader_version=.*/loader_version=0.19.3/' hmi-source/mod/gradle.properties
           sed -i 's/^loom_version=.*/loom_version=1.17.17/' hmi-source/mod/gradle.properties
-          sed -i 's/^mod_version=.*/mod_version=5.1.1+26.2-unofficial/' hmi-source/mod/gradle.properties
           sed -i 's/^fabric_api_version=.*/fabric_api_version=0.154.2+26.2/' hmi-source/mod/gradle.properties
           sed -i 's#^distributionUrl=.*#distributionUrl=https\://services.gradle.org/distributions-snapshots/gradle-9.5.1-20260510022507+0000-bin.zip#' hmi-source/mod/gradle/wrapper/gradle-wrapper.properties
-          sed -i 's/"minecraft": "~26\.1\.2"/"minecraft": "~26.2"/' hmi-source/mod/src/main/resources/fabric.mod.json
-
-      - name: Apply source port
-        run: python3 patch_hmi_26_2.py
-
-      - name: Build
-        working-directory: hmi-source/mod
-        run: |
-          chmod +x gradlew
-          ./gradlew clean build --stacktrace --console=plain
-
-      - name: Smoke test client startup
+      - name: Extract exact ItemInHandRenderer source
         working-directory: hmi-source/mod
         shell: bash
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq xvfb
-          set +e
-          set -o pipefail
-          timeout 180s xvfb-run -a ./gradlew runClient --console=plain 2>&1 | tee ../../client-smoke.log
-          status=${PIPESTATUS[0]}
-          if grep -E -q 'InvalidMixinException|MixinApplyError|Mixin transformation.*failed|ExceptionInInitializerError|Minecraft has crashed' ../../client-smoke.log; then
-            cat ../../client-smoke.log
-            exit 1
-          fi
-          if [ "$status" -ne 0 ] && [ "$status" -ne 124 ]; then
-            cat ../../client-smoke.log
-            exit "$status"
-          fi
-
-      - name: Upload JAR
-        uses: actions/upload-artifact@v4
+          chmod +x gradlew
+          ./gradlew genSources --console=plain
+          python3 - <<'PY'
+          import glob, zipfile
+          jars=glob.glob('.gradle/loom-cache/**/26.2/*-sources.jar', recursive=True)
+          if not jars:
+              raise SystemExit('sources jar not found')
+          with zipfile.ZipFile(jars[0]) as z:
+              name='net/minecraft/client/renderer/ItemInHandRenderer.java'
+              data=z.read(name)
+          open('../../ItemInHandRenderer-26.2.java','wb').write(data)
+          PY
+      - uses: actions/upload-artifact@v4
         with:
-          name: holdmyitems-5.1.1-mc26.2-runtime-fix
-          path: hmi-source/mod/build/libs/*.jar
+          name: item-in-hand-renderer-26.2-source
+          path: ItemInHandRenderer-26.2.java
           if-no-files-found: error
-
-      - name: Upload smoke log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: holdmyitems-26.2-smoke-log
-          path: client-smoke.log
-          if-no-files-found: warn
