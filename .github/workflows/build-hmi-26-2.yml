@@ -1,4 +1,4 @@
-name: Inspect HMI 26.2 Render APIs Fast
+name: Build HMI 26.2
 
 on:
   pull_request:
@@ -18,44 +18,144 @@ jobs:
         with:
           distribution: temurin
           java-version: '25'
-      - name: Configure and generate sources
+      - name: Configure 26.2 toolchain
         shell: bash
         run: |
           sed -i 's/^minecraft_version=.*/minecraft_version=26.2/' hmi-source/mod/gradle.properties
           sed -i 's/^loader_version=.*/loader_version=0.19.3/' hmi-source/mod/gradle.properties
           sed -i 's/^loom_version=.*/loom_version=1.17.17/' hmi-source/mod/gradle.properties
+          sed -i 's/^mod_version=.*/mod_version=5.1.1+26.2-unofficial/' hmi-source/mod/gradle.properties
           sed -i 's/^fabric_api_version=.*/fabric_api_version=0.154.2+26.2/' hmi-source/mod/gradle.properties
           sed -i 's#^distributionUrl=.*#distributionUrl=https\\://services.gradle.org/distributions-snapshots/gradle-9.5.1-20260510022507+0000-bin.zip#' hmi-source/mod/gradle/wrapper/gradle-wrapper.properties
-          cd hmi-source/mod
-          chmod +x gradlew
-          ./gradlew genSources --console=plain
-      - name: Extract exact relevant sources
+      - name: Apply Minecraft 26.2 source port
         shell: bash
         run: |
           python3 - <<'PY'
-          import glob, zipfile, re
-          jars=glob.glob('hmi-source/mod/.gradle/loom-cache/**/26.2/*-sources.jar',recursive=True)
-          if not jars: raise SystemExit('sources jar not found')
-          jar=jars[0]
-          print('using',jar)
-          with zipfile.ZipFile(jar) as z:
-            names=[n for n in z.namelist() if n.endswith('.java')]
-            needles=['BufferSource','Outline','ItemFeatureRenderer','ItemSubmit','SubmitNodeStorage','BlendFunction','RenderPipeline','VertexFormat','RenderType','Foil']
-            selected=[]
-            for n in names:
-              base=n.rsplit('/',1)[-1]
-              if any(x.lower() in base.lower() for x in needles): selected.append(n); continue
-              txt=z.read(n).decode('utf-8','ignore')
-              if any(x in txt for x in ['outlineColor()', 'foilType()', 'putBakedQuad', 'getFoil', 'withBindGroup', 'BlendFunction(', 'enum Mode']):
-                selected.append(n)
-            with open('hmi-render-api-report.txt','w',encoding='utf-8') as f:
-              for n in sorted(set(selected)):
-                f.write(f'\n===== {n} =====\n')
-                f.write(z.read(n).decode('utf-8','ignore'))
-          print('selected',len(set(selected)))
+          from pathlib import Path
+          root=Path('hmi-source/mod/src/main/java')
+          for p in root.rglob('*.java'):
+              s=p.read_text(encoding='utf-8')
+              s=s.replace('.getMainCamera()', '.mainCamera()')
+              s=s.replace('Minecraft.getInstance().getToastManager()', 'Minecraft.getInstance().gui.toastManager()')
+              p.write_text(s,encoding='utf-8')
+          item=root/'com/holdmylua/source/mixin/render/ItemRendererMixin.java'
+          item.write_text(r'''package com.holdmylua.source.mixin.render;
+
+import com.holdmylua.source.global.DispatcherStorage;
+import com.holdmylua.source.global.GlobalsStorage;
+import com.holdmylua.source.global.item_model.ItemModelContext;
+import com.holdmylua.source.global.item_model.ItemModelStorage;
+import com.holdmylua.source.lua_runtime.ModelScriptCache;
+import com.holdmylua.source.lua_runtime.ScriptHolder;
+import com.mojang.blaze3d.vertex.PoseStack;
+import com.mojang.blaze3d.vertex.QuadInstance;
+import com.mojang.blaze3d.vertex.VertexConsumer;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.player.AbstractClientPlayer;
+import net.minecraft.client.renderer.feature.ItemFeatureRenderer;
+import net.minecraft.client.renderer.rendertype.RenderType;
+import net.minecraft.client.resources.model.geometry.BakedQuad;
+import net.minecraft.world.item.ItemDisplayContext;
+import net.minecraft.world.item.ItemStack;
+import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.Shadow;
+import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+
+@Mixin(ItemFeatureRenderer.class)
+public abstract class ItemRendererMixin {
+    @Shadow
+    protected abstract VertexConsumer getVertexBuilder(RenderType renderType);
+
+    @Inject(method = "prepareMainSubmit", at = @At("HEAD"), cancellable = true)
+    private void hmi$prepareMainSubmit(ItemFeatureRenderer.Submit submit, CallbackInfo ci) {
+        Minecraft minecraft = Minecraft.getInstance();
+        AbstractClientPlayer player = minecraft.player;
+        ItemDisplayContext displayContext = submit.displayContext();
+        boolean handContext = (displayContext == ItemDisplayContext.THIRD_PERSON_LEFT_HAND
+            || displayContext == ItemDisplayContext.THIRD_PERSON_RIGHT_HAND)
+            && player != null
+            && minecraft.options.getCameraType().isFirstPerson();
+        if (!handContext) return;
+
+        ItemModelContext context = ItemModelStorage.get();
+        ItemStack renderedItem = DispatcherStorage.getRenderedItem();
+        ScriptHolder.itemModelCache.executeModel(context, renderedItem, player, GlobalsStorage.modelPartAnimator);
+        for (ModelScriptCache cache : ScriptHolder.itemModelAddonsCache) {
+            cache.executeModel(context, renderedItem, player, GlobalsStorage.modelPartAnimator);
+        }
+
+        QuadInstance quadInstance = new QuadInstance();
+        quadInstance.setLightCoords(submit.lightCoords());
+        quadInstance.setOverlayCoords(submit.overlayCoords());
+        PoseStack posed = new PoseStack();
+        int index = 0;
+        for (BakedQuad quad : submit.quads()) {
+            BakedQuad.MaterialInfo material = quad.materialInfo();
+            RenderType renderType = material.itemRenderType();
+            int tint = material.isTinted() && material.tintIndex() >= 0 && material.tintIndex() < submit.tintLayers().length
+                ? submit.tintLayers()[material.tintIndex()] : -1;
+            quadInstance.setColor(tint);
+            posed.pushPose();
+            posed.last().set(submit.pose());
+            GlobalsStorage.modelPartAnimator.applyPoses(index, posed);
+            this.getVertexBuilder(renderType).putBakedQuad(posed.last(), quad, quadInstance);
+            posed.popPose();
+            index++;
+        }
+        GlobalsStorage.modelPartAnimator.clear();
+        ci.cancel();
+    }
+}
+''',encoding='utf-8')
+          particle=root/'com/holdmylua/source/patricles/render/ParticleRenderLayers.java'
+          particle.write_text(r'''package com.holdmylua.source.patricles.render;
+
+import com.holdmylua.source.mixin.render.RenderTypeInvoker;
+import com.mojang.blaze3d.pipeline.BlendFunction;
+import com.mojang.blaze3d.pipeline.ColorTargetState;
+import com.mojang.blaze3d.pipeline.DepthStencilState;
+import com.mojang.blaze3d.pipeline.RenderPipeline;
+import com.mojang.blaze3d.platform.BlendFactor;
+import com.mojang.blaze3d.platform.CompareOp;
+import java.util.function.Function;
+import net.minecraft.client.renderer.RenderPipelines;
+import net.minecraft.client.renderer.rendertype.RenderSetup;
+import net.minecraft.client.renderer.rendertype.RenderType;
+import net.minecraft.resources.Identifier;
+import net.minecraft.util.Util;
+
+public class ParticleRenderLayers {
+    static BlendFunction ADDITIVE = new BlendFunction(BlendFactor.SRC_ALPHA, BlendFactor.ONE);
+    static RenderPipeline ADDITIVE_PARTICLE = RenderPipelines.register(
+        RenderPipeline.builder(RenderPipelines.GUI_TEXTURED_SNIPPET)
+            .withLocation("pipeline/additive_particle_effect")
+            .withColorTargetState(new ColorTargetState(ADDITIVE))
+            .withDepthStencilState(new DepthStencilState(CompareOp.ALWAYS_PASS, false))
+            .build()
+    );
+    private static final Function<Identifier, RenderType> ADDITIVE_PARTICLE_LAYER = Util.memoize(
+        texture -> RenderTypeInvoker.hmi$create(
+            "fire_screen_effect", RenderSetup.builder(ADDITIVE_PARTICLE).withTexture("Sampler0", texture).createRenderSetup()
+        )
+    );
+
+    public static RenderType additiveParticle(Identifier texture) {
+        return ADDITIVE_PARTICLE_LAYER.apply(texture);
+    }
+}
+''',encoding='utf-8')
           PY
+      - name: Build
+        working-directory: hmi-source/mod
+        shell: bash
+        run: |
+          chmod +x gradlew
+          ./gradlew clean build --stacktrace --console=plain
+          ls -lah build/libs
       - uses: actions/upload-artifact@v4
         with:
-          name: hmi-26.2-render-api-report-fast
-          path: hmi-render-api-report.txt
+          name: holdmyitems-5.1.1-mc26.2
+          path: hmi-source/mod/build/libs/*.jar
           if-no-files-found: error
