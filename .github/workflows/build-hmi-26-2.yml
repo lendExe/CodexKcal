@@ -1,4 +1,4 @@
-name: Diagnose HMI 26.2 In-World Animations
+name: Build HMI 26.2 Resource Pack Fix
 
 on:
   pull_request:
@@ -25,19 +25,36 @@ jobs:
           sed -i 's/^minecraft_version=.*/minecraft_version=26.2/' hmi-source/mod/gradle.properties
           sed -i 's/^loader_version=.*/loader_version=0.19.3/' hmi-source/mod/gradle.properties
           sed -i 's/^loom_version=.*/loom_version=1.17.17/' hmi-source/mod/gradle.properties
-          sed -i 's/^mod_version=.*/mod_version=5.1.1+26.2-worldtest/' hmi-source/mod/gradle.properties
+          sed -i 's/^mod_version=.*/mod_version=5.1.1+26.2-resourcefix/' hmi-source/mod/gradle.properties
           sed -i 's/^fabric_api_version=.*/fabric_api_version=0.154.2+26.2/' hmi-source/mod/gradle.properties
           sed -i 's#^distributionUrl=.*#distributionUrl=https\://services.gradle.org/distributions-snapshots/gradle-9.5.1-20260510022507+0000-bin.zip#' hmi-source/mod/gradle/wrapper/gradle-wrapper.properties
           sed -i 's/"minecraft": "~26\.1\.2"/"minecraft": "~26.2"/' hmi-source/mod/src/main/resources/fabric.mod.json
 
-      - name: Apply source port and diagnostics
+      - name: Apply Minecraft 26.2 port
         run: |
           python3 patch_hmi_26_2.py
           python3 patch_hmi_26_2_redirects.py
           python3 patch_hmi_26_2_camera.py
           python3 patch_hmi_26_2_mixins.py
           python3 patch_hmi_26_2_animations.py
-          python3 patch_hmi_26_2_lua_debug.py
+          python3 patch_hmi_26_2_resourcepack.py
+
+      - name: Verify embedded animation pack metadata
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          path = Path('hmi-source/mod/src/main/resources/resourcepacks/pack_test/pack.mcmeta')
+          data = json.loads(path.read_text(encoding='utf-8'))
+          pack = data['pack']
+          assert pack['pack_format'] == 88, pack
+          assert pack['min_format'] == 88, pack
+          assert pack['max_format'] == 88, pack
+          for name in ('hand_pose.lua', 'hand_relative_pose.lua', 'item_pose.lua', 'item_model.lua'):
+              lua = Path('hmi-source/mod/src/main/resources/resourcepacks/pack_test/assets/minecraft/holdmyitems') / name
+              assert lua.is_file() and lua.stat().st_size > 100, lua
+          PY
 
       - name: Build
         working-directory: hmi-source/mod
@@ -52,7 +69,6 @@ jobs:
           python3 - <<'PY'
           import json
           import urllib.request
-
           manifest_url = 'https://piston-meta.mojang.com/mc/game/version_manifest_v2.json'
           with urllib.request.urlopen(manifest_url) as response:
               manifest = json.load(response)
@@ -70,15 +86,14 @@ jobs:
           view-distance=4
           simulation-distance=4
           max-players=1
-          enable-command-block=false
           EOF
           set +e
-          (sleep 45; echo stop) | timeout 100s java -Xms512M -Xmx1G -jar server.jar nogui 2>&1 | tee "$GITHUB_WORKSPACE/server-world.log"
+          (sleep 45; echo stop) | timeout 100s java -Xms512M -Xmx1G -jar server.jar nogui > "$GITHUB_WORKSPACE/server-world.log" 2>&1
           test -f AnimationTest/level.dat
           mkdir -p "$GITHUB_WORKSPACE/hmi-source/mod/run/saves"
           cp -a AnimationTest "$GITHUB_WORKSPACE/hmi-source/mod/run/saves/AnimationTest"
 
-      - name: In-world client animation test
+      - name: In-world resource and Lua test
         working-directory: hmi-source/mod
         shell: bash
         run: |
@@ -86,8 +101,13 @@ jobs:
           sudo apt-get install -y -qq xvfb
           set +e
           set -o pipefail
-          timeout 240s xvfb-run -a ./gradlew runClient --args='--quickPlaySingleplayer AnimationTest' --console=plain 2>&1 | tee ../../client-world.log
+          timeout 180s xvfb-run -a ./gradlew runClient --args='--quickPlaySingleplayer AnimationTest' --console=plain 2>&1 | tee ../../client-world.log
           status=${PIPESTATUS[0]}
+          if grep -q 'Removed resource pack holdmyitems:pack_test' ../../client-world.log; then
+            cat ../../client-world.log
+            exit 1
+          fi
+          grep -q 'holdmyitems:pack_test' ../../client-world.log
           if grep -E -q '\[HoldMyItems\] Lua runtime error|InvalidMixinException|InvalidInjectionException|MixinApplyError|Mixin transformation.*failed|ExceptionInInitializerError|Minecraft has crashed' ../../client-world.log; then
             cat ../../client-world.log
             exit 1
@@ -97,20 +117,19 @@ jobs:
             exit "$status"
           fi
 
-      - name: Upload diagnostic logs
+      - name: Upload JAR
+        uses: actions/upload-artifact@v4
+        with:
+          name: holdmyitems-5.1.1-mc26.2-resourcefix
+          path: hmi-source/mod/build/libs/*.jar
+          if-no-files-found: error
+
+      - name: Upload verification logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: hmi-26.2-in-world-diagnostics
+          name: hmi-26.2-resourcefix-logs
           path: |
             client-world.log
             server-world.log
           if-no-files-found: warn
-
-      - name: Upload diagnostic JAR
-        if: success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: holdmyitems-5.1.1-mc26.2-worldtest
-          path: hmi-source/mod/build/libs/*.jar
-          if-no-files-found: error
