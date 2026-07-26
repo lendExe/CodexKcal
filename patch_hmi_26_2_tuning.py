@@ -38,18 +38,16 @@ if fast_swing not in text:
 text = text.replace(fast_swing, custom_swing, 1)
 
 # Minecraft 26.2's first-person projection makes the old HMI framing sit too
-# close to the screen edges. Pull each hand toward the centre and slightly
-# farther from the camera before rendering both the arm and held item.
-anchor = '''             this.particles
-          );
-          matrices.pushPose();
-          this.mainHandPose('''
-replacement = '''             this.particles
-          );
-          matrices.translate(-0.14F * l, 0.03F, -0.10F);
-          matrices.pushPose();
-          this.mainHandPose('''
-if anchor not in text:
-    raise RuntimeError('Hand framing insertion point not found')
-text = text.replace(anchor, replacement, 1)
+# close to the screen edges. Insert the correction after scenePoseMain and
+# before the arm/item branches without depending on whitespace formatting.
+scene_start = text.find('this.scenePoseMain(')
+if scene_start < 0:
+    raise RuntimeError('scenePoseMain call not found')
+next_push = text.find('matrices.pushPose();', scene_start)
+if next_push < 0:
+    raise RuntimeError('Pose push after scenePoseMain not found')
+line_start = text.rfind('\n', 0, next_push) + 1
+indent = text[line_start:next_push]
+correction = f'{indent}matrices.translate(-0.14F * l, 0.03F, -0.10F);\n'
+text = text[:line_start] + correction + text[line_start:]
 held.write_text(text, encoding='utf-8')
