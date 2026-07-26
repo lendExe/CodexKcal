@@ -29,10 +29,10 @@ jobs:
         run: |
           sed -i 's/^minecraft_version=.*/minecraft_version=26.2/' hmi-source/mod/gradle.properties
           sed -i 's/^loader_version=.*/loader_version=0.19.3/' hmi-source/mod/gradle.properties
-          sed -i 's/^loom_version=.*/loom_version=1.17-SNAPSHOT/' hmi-source/mod/gradle.properties
+          sed -i 's/^loom_version=.*/loom_version=1.17.16/' hmi-source/mod/gradle.properties
           sed -i 's/^mod_version=.*/mod_version=5.1.1+26.2-unofficial/' hmi-source/mod/gradle.properties
           sed -i 's/^fabric_api_version=.*/fabric_api_version=0.154.2+26.2/' hmi-source/mod/gradle.properties
-          sed -i 's#gradle-[0-9.]*-bin.zip#gradle-9.5-bin.zip#' hmi-source/mod/gradle/wrapper/gradle-wrapper.properties
+          sed -i 's#gradle-[0-9.]*-bin.zip#gradle-9.4.1-bin.zip#' hmi-source/mod/gradle/wrapper/gradle-wrapper.properties
           grep -E '^(minecraft|loader|loom|mod|fabric_api)_version=' hmi-source/mod/gradle.properties
           grep distributionUrl hmi-source/mod/gradle/wrapper/gradle-wrapper.properties
 
