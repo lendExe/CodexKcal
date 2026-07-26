@@ -25,7 +25,7 @@ jobs:
           sed -i 's/^minecraft_version=.*/minecraft_version=26.2/' hmi-source/mod/gradle.properties
           sed -i 's/^loader_version=.*/loader_version=0.19.3/' hmi-source/mod/gradle.properties
           sed -i 's/^loom_version=.*/loom_version=1.17.17/' hmi-source/mod/gradle.properties
-          sed -i 's/^mod_version=.*/mod_version=5.1.1+26.2-resourcefix/' hmi-source/mod/gradle.properties
+          sed -i 's/^mod_version=.*/mod_version=5.1.1+26.2-resourcefix2/' hmi-source/mod/gradle.properties
           sed -i 's/^fabric_api_version=.*/fabric_api_version=0.154.2+26.2/' hmi-source/mod/gradle.properties
           sed -i 's#^distributionUrl=.*#distributionUrl=https\://services.gradle.org/distributions-snapshots/gradle-9.5.1-20260510022507+0000-bin.zip#' hmi-source/mod/gradle/wrapper/gradle-wrapper.properties
           sed -i 's/"minecraft": "~26\.1\.2"/"minecraft": "~26.2"/' hmi-source/mod/src/main/resources/fabric.mod.json
@@ -49,8 +49,8 @@ jobs:
           data = json.loads(path.read_text(encoding='utf-8'))
           pack = data['pack']
           assert pack['pack_format'] == 88, pack
-          assert pack['min_format'] == 88, pack
-          assert pack['max_format'] == 88, pack
+          for obsolete in ('supported_formats', 'min_format', 'max_format'):
+              assert obsolete not in pack, pack
           for name in ('hand_pose.lua', 'hand_relative_pose.lua', 'item_pose.lua', 'item_model.lua'):
               lua = Path('hmi-source/mod/src/main/resources/resourcepacks/pack_test/assets/minecraft/holdmyitems') / name
               assert lua.is_file() and lua.stat().st_size > 100, lua
@@ -107,8 +107,8 @@ jobs:
             cat ../../client-world.log
             exit 1
           fi
-          grep -q 'holdmyitems:pack_test' ../../client-world.log
-          if grep -E -q '\[HoldMyItems\] Lua runtime error|InvalidMixinException|InvalidInjectionException|MixinApplyError|Mixin transformation.*failed|ExceptionInInitializerError|Minecraft has crashed' ../../client-world.log; then
+          grep -E -q 'Reloading ResourceManager:.*holdmyitems:pack_test' ../../client-world.log
+          if grep -E -q '\[HoldMyItems\] Lua runtime error|JsonParseException: Pack key|InvalidMixinException|InvalidInjectionException|MixinApplyError|Mixin transformation.*failed|ExceptionInInitializerError|Minecraft has crashed' ../../client-world.log; then
             cat ../../client-world.log
             exit 1
           fi
@@ -120,7 +120,7 @@ jobs:
       - name: Upload JAR
         uses: actions/upload-artifact@v4
         with:
-          name: holdmyitems-5.1.1-mc26.2-resourcefix
+          name: holdmyitems-5.1.1-mc26.2-resourcefix2
           path: hmi-source/mod/build/libs/*.jar
           if-no-files-found: error
 
@@ -128,7 +128,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: hmi-26.2-resourcefix-logs
+          name: hmi-26.2-resourcefix2-logs
           path: |
             client-world.log
             server-world.log
