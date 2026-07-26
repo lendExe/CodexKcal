@@ -1,0 +1,48 @@
+name: Build HMI 26.2
+
+on:
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout workspace
+        uses: actions/checkout@v4
+
+      - name: Checkout HMI 26.1.2 port source
+        uses: actions/checkout@v4
+        with:
+          repository: ByteMe6/HMI-26.1.2
+          path: hmi-source
+
+      - name: Set up Java 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - name: Update build metadata for Minecraft 26.2
+        shell: bash
+        run: |
+          sed -i 's/^minecraft_version=.*/minecraft_version=26.2/' hmi-source/mod/gradle.properties
+          sed -i 's/^loader_version=.*/loader_version=0.19.3/' hmi-source/mod/gradle.properties
+          sed -i 's/^loom_version=.*/loom_version=1.17-SNAPSHOT/' hmi-source/mod/gradle.properties
+          sed -i 's/^mod_version=.*/mod_version=5.1.1+26.2-unofficial/' hmi-source/mod/gradle.properties
+          sed -i 's/^fabric_api_version=.*/fabric_api_version=0.154.2+26.2/' hmi-source/mod/gradle.properties
+          grep -E '^(minecraft|loader|loom|mod|fabric_api)_version=' hmi-source/mod/gradle.properties
+
+      - name: Build
+        working-directory: hmi-source/mod
+        run: |
+          chmod +x gradlew
+          ./gradlew clean build --stacktrace
+
+      - name: Upload built jar
+        uses: actions/upload-artifact@v4
+        with:
+          name: holdmyitems-26.2
+          path: hmi-source/mod/build/libs/*.jar
+          if-no-files-found: error
