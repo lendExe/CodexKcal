@@ -42,14 +42,14 @@ jobs:
         run: |
           chmod +x gradlew
           set -o pipefail
-          ./gradlew clean build --stacktrace --console=plain 2>&1 | tee build/hmi-build.log
+          ./gradlew clean build --stacktrace --console=plain 2>&1 | tee ../../hmi-build.log
 
       - name: Upload build diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: hmi-26.2-build-log
-          path: hmi-source/mod/build/hmi-build.log
+          path: hmi-build.log
           if-no-files-found: error
 
       - name: Upload built jar
