@@ -1,4 +1,4 @@
-name: Build HMI 26.2 Tuned Animations
+name: Build HMI 26.2 Salmon and Arm Fix
 
 on:
   pull_request:
@@ -25,12 +25,12 @@ jobs:
           sed -i 's/^minecraft_version=.*/minecraft_version=26.2/' hmi-source/mod/gradle.properties
           sed -i 's/^loader_version=.*/loader_version=0.19.3/' hmi-source/mod/gradle.properties
           sed -i 's/^loom_version=.*/loom_version=1.17.17/' hmi-source/mod/gradle.properties
-          sed -i 's/^mod_version=.*/mod_version=5.1.1+26.2-tuned/' hmi-source/mod/gradle.properties
+          sed -i 's/^mod_version=.*/mod_version=5.1.1+26.2-salmon-armfix/' hmi-source/mod/gradle.properties
           sed -i 's/^fabric_api_version=.*/fabric_api_version=0.154.2+26.2/' hmi-source/mod/gradle.properties
           sed -i 's#^distributionUrl=.*#distributionUrl=https\://services.gradle.org/distributions-snapshots/gradle-9.5.1-20260510022507+0000-bin.zip#' hmi-source/mod/gradle/wrapper/gradle-wrapper.properties
           sed -i 's/"minecraft": "~26\.1\.2"/"minecraft": "~26.2"/' hmi-source/mod/src/main/resources/fabric.mod.json
 
-      - name: Apply Minecraft 26.2 port and tuning
+      - name: Apply Minecraft 26.2 fixes
         run: |
           python3 patch_hmi_26_2.py
           python3 patch_hmi_26_2_redirects.py
@@ -39,13 +39,15 @@ jobs:
           python3 patch_hmi_26_2_animations.py
           python3 patch_hmi_26_2_resourcepack.py
           python3 patch_hmi_26_2_tuning.py
+          python3 patch_hmi_26_2_salmon.py
 
-      - name: Verify tuning and embedded pack
+      - name: Verify fixes
         shell: bash
         run: |
           python3 - <<'PY'
           import json
           from pathlib import Path
+
           pack_path = Path('hmi-source/mod/src/main/resources/resourcepacks/pack_test/pack.mcmeta')
           pack = json.loads(pack_path.read_text(encoding='utf-8'))['pack']
           assert pack['pack_format'] == 88
@@ -57,7 +59,19 @@ jobs:
           held = Path('hmi-source/mod/src/main/java/com/holdmylua/source/mixin/render/HeldItemRendererMixin.java').read_text(encoding='utf-8')
           assert 'elapsed * 0.65F' in game
           assert 'Math.max(mainHandProgress' not in held
-          assert 'matrices.translate(-0.14F * l, 0.03F, -0.10F);' in held
+          assert 'matrices.translate(-0.30F * l, -0.04F, -0.24F);' in held
+          assert 'matrices.scale(0.86F, 0.86F, 0.86F);' in held
+
+          assets = Path('hmi-source/mod/src/main/resources/resourcepacks/pack_test/assets/minecraft')
+          salmon_model = json.loads((assets / 'models/item/salmon_bucket_3d.json').read_text(encoding='utf-8'))
+          bad_uv = []
+          for element in salmon_model.get('elements', []):
+              for face in element.get('faces', {}).values():
+                  uv = face.get('uv', [])
+                  if any(value < 0 for value in uv):
+                      bad_uv.append(uv)
+          assert not bad_uv, bad_uv
+          assert not (assets / 'textures/item/salmon_bucket_3d.png.mcmeta').exists()
           PY
 
       - name: Build
@@ -97,7 +111,7 @@ jobs:
           mkdir -p "$GITHUB_WORKSPACE/hmi-source/mod/run/saves"
           cp -a AnimationTest "$GITHUB_WORKSPACE/hmi-source/mod/run/saves/AnimationTest"
 
-      - name: In-world resource and Lua test
+      - name: In-world model and Lua test
         working-directory: hmi-source/mod
         shell: bash
         run: |
@@ -112,7 +126,7 @@ jobs:
             exit 1
           fi
           grep -E -q 'Reloading ResourceManager:.*holdmyitems:pack_test' ../../client-world.log
-          if grep -E -q '\[HoldMyItems\] Lua runtime error|JsonParseException: Pack|InvalidMixinException|InvalidInjectionException|MixinApplyError|Mixin transformation.*failed|ExceptionInInitializerError|Minecraft has crashed' ../../client-world.log; then
+          if grep -E -q "Unable to bake item model: 'minecraft:salmon_bucket'|Invalid frame index on sprite minecraft:item/salmon_bucket_3d|\[HoldMyItems\] Lua runtime error|JsonParseException: Pack|InvalidMixinException|InvalidInjectionException|MixinApplyError|Mixin transformation.*failed|ExceptionInInitializerError|Minecraft has crashed" ../../client-world.log; then
             cat ../../client-world.log
             exit 1
           fi
@@ -124,7 +138,7 @@ jobs:
       - name: Upload JAR
         uses: actions/upload-artifact@v4
         with:
-          name: holdmyitems-5.1.1-mc26.2-tuned
+          name: holdmyitems-5.1.1-mc26.2-salmon-armfix
           path: hmi-source/mod/build/libs/*.jar
           if-no-files-found: error
 
@@ -132,7 +146,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: hmi-26.2-tuned-logs
+          name: hmi-26.2-salmon-armfix-logs
           path: |
             client-world.log
             server-world.log
