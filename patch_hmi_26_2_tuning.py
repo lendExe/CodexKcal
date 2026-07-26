@@ -3,7 +3,7 @@ import re
 
 root = Path('hmi-source/mod/src/main/java')
 
-# Slow all time-based Lua transitions to 65% of their previous speed.
+# Keep the slower timing that already feels better on Minecraft 26.2.
 game_renderer = root / 'com/holdmylua/source/mixin/client/GameRendererMixin.java'
 text = game_renderer.read_text(encoding='utf-8')
 text, count = re.subn(
@@ -19,8 +19,7 @@ game_renderer.write_text(text, encoding='utf-8')
 held = root / 'com/holdmylua/source/mixin/render/HeldItemRendererMixin.java'
 text = held.read_text(encoding='utf-8')
 
-# Remove the vanilla-progress fallback. It made the custom 10-tick HMI swing
-# snap to Minecraft's shorter attack animation and therefore look too fast.
+# Remove the vanilla-progress fallback. It made the HMI attack snap too fast.
 custom_swing = '''float mainHandProgress = accessor.hMI5_0$getMainHandSwingProgress(tickProgress);
              this.mainHandSwingProgress = mainHandProgress;
              float offHandProgress = accessor.hMI5_0$getOffHandSwingProgress(tickProgress);
@@ -46,20 +45,28 @@ if match:
 elif 'Math.max(mainHandProgress' in text or 'vanillaSwingProgress' in text:
     raise RuntimeError('Fast swing fallback exists but did not match safely')
 
-# Minecraft 26.2's first-person projection makes the old HMI framing sit too
-# close to the screen edges. Insert the correction after scenePoseMain and
-# before the arm/item branches without depending on whitespace formatting.
-correction_statement = 'matrices.translate(-0.14F * l, 0.03F, -0.10F);'
-if correction_statement not in text:
-    scene_start = text.find('this.scenePoseMain(')
-    if scene_start < 0:
-        raise RuntimeError('scenePoseMain call not found')
-    next_push = text.find('matrices.pushPose();', scene_start)
-    if next_push < 0:
-        raise RuntimeError('Pose push after scenePoseMain not found')
-    line_start = text.rfind('\n', 0, next_push) + 1
-    indent = text[line_start:next_push]
-    correction = f'{indent}{correction_statement}\n'
-    text = text[:line_start] + correction + text[line_start:]
+# Remove a previous framing correction if this script is applied repeatedly.
+text = re.sub(
+    r'\s*matrices\.translate\(-0\.(?:14|30)F \* l,\s*-?0\.0[34]F,\s*-0\.(?:10|24)F\);\s*'
+    r'(?:matrices\.scale\(0\.86F,\s*0\.86F,\s*0\.86F\);\s*)?',
+    '\n',
+    text,
+    count=1,
+)
 
+# Stronger 26.2 first-person framing: pull both hands toward the centre,
+# slightly down and farther away, then reduce the complete arm/item scene.
+scene_start = text.find('this.scenePoseMain(')
+if scene_start < 0:
+    raise RuntimeError('scenePoseMain call not found')
+next_push = text.find('matrices.pushPose();', scene_start)
+if next_push < 0:
+    raise RuntimeError('Pose push after scenePoseMain not found')
+line_start = text.rfind('\n', 0, next_push) + 1
+indent = text[line_start:next_push]
+correction = (
+    f'{indent}matrices.translate(-0.30F * l, -0.04F, -0.24F);\n'
+    f'{indent}matrices.scale(0.86F, 0.86F, 0.86F);\n'
+)
+text = text[:line_start] + correction + text[line_start:]
 held.write_text(text, encoding='utf-8')
