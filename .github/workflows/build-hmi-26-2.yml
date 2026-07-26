@@ -10,15 +10,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/checkout@v4
         with:
           repository: ByteMe6/HMI-26.1.2
           path: hmi-source
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '25'
-      - name: Configure 26.2 toolchain
+
+      - name: Configure Minecraft 26.2
         shell: bash
         run: |
           sed -i 's/^minecraft_version=.*/minecraft_version=26.2/' hmi-source/mod/gradle.properties
@@ -26,127 +29,239 @@ jobs:
           sed -i 's/^loom_version=.*/loom_version=1.17.17/' hmi-source/mod/gradle.properties
           sed -i 's/^mod_version=.*/mod_version=5.1.1+26.2-unofficial/' hmi-source/mod/gradle.properties
           sed -i 's/^fabric_api_version=.*/fabric_api_version=0.154.2+26.2/' hmi-source/mod/gradle.properties
-          sed -i 's#^distributionUrl=.*#distributionUrl=https\\://services.gradle.org/distributions-snapshots/gradle-9.5.1-20260510022507+0000-bin.zip#' hmi-source/mod/gradle/wrapper/gradle-wrapper.properties
+          sed -i 's#^distributionUrl=.*#distributionUrl=https\://services.gradle.org/distributions-snapshots/gradle-9.5.1-20260510022507+0000-bin.zip#' hmi-source/mod/gradle/wrapper/gradle-wrapper.properties
+          sed -i 's/"minecraft": "~26\.1\.2"/"minecraft": "~26.2"/' hmi-source/mod/src/main/resources/fabric.mod.json
+
       - name: Apply Minecraft 26.2 source port
         shell: bash
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          root=Path('hmi-source/mod/src/main/java')
-          for p in root.rglob('*.java'):
-              s=p.read_text(encoding='utf-8')
-              s=s.replace('.getMainCamera()', '.mainCamera()')
-              s=s.replace('Minecraft.getInstance().getToastManager()', 'Minecraft.getInstance().gui.toastManager()')
-              p.write_text(s,encoding='utf-8')
-          item=root/'com/holdmylua/source/mixin/render/ItemRendererMixin.java'
+
+          root = Path('hmi-source/mod/src/main/java')
+          for path in root.rglob('*.java'):
+              text = path.read_text(encoding='utf-8')
+              text = text.replace('.getMainCamera()', '.mainCamera()')
+              text = text.replace(
+                  'Minecraft.getInstance().getToastManager()',
+                  'Minecraft.getInstance().gui.toastManager()'
+              )
+              path.write_text(text, encoding='utf-8')
+
+          item = root / 'com/holdmylua/source/mixin/render/ItemRendererMixin.java'
           item.write_text(r'''package com.holdmylua.source.mixin.render;
 
-import com.holdmylua.source.global.DispatcherStorage;
-import com.holdmylua.source.global.GlobalsStorage;
-import com.holdmylua.source.global.item_model.ItemModelContext;
-import com.holdmylua.source.global.item_model.ItemModelStorage;
-import com.holdmylua.source.lua_runtime.ModelScriptCache;
-import com.holdmylua.source.lua_runtime.ScriptHolder;
-import com.mojang.blaze3d.vertex.PoseStack;
-import com.mojang.blaze3d.vertex.QuadInstance;
-import com.mojang.blaze3d.vertex.VertexConsumer;
-import net.minecraft.client.Minecraft;
-import net.minecraft.client.player.AbstractClientPlayer;
-import net.minecraft.client.renderer.feature.ItemFeatureRenderer;
-import net.minecraft.client.renderer.rendertype.RenderType;
-import net.minecraft.client.resources.model.geometry.BakedQuad;
-import net.minecraft.world.item.ItemDisplayContext;
-import net.minecraft.world.item.ItemStack;
-import org.spongepowered.asm.mixin.Mixin;
-import org.spongepowered.asm.mixin.Shadow;
-import org.spongepowered.asm.mixin.injection.At;
-import org.spongepowered.asm.mixin.injection.Inject;
-import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+          import com.holdmylua.source.global.GlobalsStorage;
+          import com.holdmylua.source.global.item_model.ItemModelContext;
+          import com.holdmylua.source.global.item_model.ItemModelStorage;
+          import com.holdmylua.source.lua_runtime.ModelScriptCache;
+          import com.holdmylua.source.lua_runtime.ScriptHolder;
+          import com.mojang.blaze3d.vertex.PoseStack;
+          import com.mojang.blaze3d.vertex.QuadInstance;
+          import com.mojang.blaze3d.vertex.SheetedDecalTextureGenerator;
+          import com.mojang.blaze3d.vertex.VertexConsumer;
+          import com.mojang.math.MatrixUtil;
+          import java.util.IdentityHashMap;
+          import java.util.List;
+          import java.util.Map;
+          import net.minecraft.client.Minecraft;
+          import net.minecraft.client.player.AbstractClientPlayer;
+          import net.minecraft.client.renderer.feature.FeatureFrameContext;
+          import net.minecraft.client.renderer.feature.ItemFeatureRenderer;
+          import net.minecraft.client.renderer.item.ItemStackRenderState.FoilType;
+          import net.minecraft.client.renderer.rendertype.OutputTarget;
+          import net.minecraft.client.renderer.rendertype.RenderType;
+          import net.minecraft.client.renderer.rendertype.RenderTypes;
+          import net.minecraft.client.resources.model.geometry.BakedQuad;
+          import net.minecraft.world.item.ItemDisplayContext;
+          import net.minecraft.world.item.ItemStack;
+          import org.jspecify.annotations.Nullable;
+          import org.spongepowered.asm.mixin.Mixin;
+          import org.spongepowered.asm.mixin.Shadow;
+          import org.spongepowered.asm.mixin.Unique;
+          import org.spongepowered.asm.mixin.injection.At;
+          import org.spongepowered.asm.mixin.injection.Inject;
+          import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-@Mixin(ItemFeatureRenderer.class)
-public abstract class ItemRendererMixin {
-    @Shadow
-    protected abstract VertexConsumer getVertexBuilder(RenderType renderType);
+          @Mixin(ItemFeatureRenderer.class)
+          public abstract class ItemRendererMixin {
+             @Shadow
+             protected abstract VertexConsumer getVertexBuilder(RenderType renderType);
 
-    @Inject(method = "prepareMainSubmit", at = @At("HEAD"), cancellable = true)
-    private void hmi$prepareMainSubmit(ItemFeatureRenderer.Submit submit, CallbackInfo ci) {
-        Minecraft minecraft = Minecraft.getInstance();
-        AbstractClientPlayer player = minecraft.player;
-        ItemDisplayContext displayContext = submit.displayContext();
-        boolean handContext = (displayContext == ItemDisplayContext.THIRD_PERSON_LEFT_HAND
-            || displayContext == ItemDisplayContext.THIRD_PERSON_RIGHT_HAND)
-            && player != null
-            && minecraft.options.getCameraType().isFirstPerson();
-        if (!handContext) return;
+             @Inject(method = "buildGroup", at = @At("HEAD"), cancellable = true)
+             private void hmi$buildGroup(
+                FeatureFrameContext frameContext,
+                List<ItemFeatureRenderer.Submit> submits,
+                CallbackInfo ci
+             ) {
+                Map<ItemFeatureRenderer.Submit, ItemModelContext> contexts = new IdentityHashMap<>();
 
-        ItemModelContext context = ItemModelStorage.get();
-        ItemStack renderedItem = DispatcherStorage.getRenderedItem();
-        ScriptHolder.itemModelCache.executeModel(context, renderedItem, player, GlobalsStorage.modelPartAnimator);
-        for (ModelScriptCache cache : ScriptHolder.itemModelAddonsCache) {
-            cache.executeModel(context, renderedItem, player, GlobalsStorage.modelPartAnimator);
-        }
+                for (ItemFeatureRenderer.Submit submit : submits) {
+                   ItemModelContext context = null;
+                   if (hmi$isFirstPersonHand(submit)) {
+                      context = ItemModelStorage.get();
+                      contexts.put(submit, context);
+                   }
+                   hmi$renderPass(submit, false, context);
+                }
 
-        QuadInstance quadInstance = new QuadInstance();
-        quadInstance.setLightCoords(submit.lightCoords());
-        quadInstance.setOverlayCoords(submit.overlayCoords());
-        PoseStack posed = new PoseStack();
-        int index = 0;
-        for (BakedQuad quad : submit.quads()) {
-            BakedQuad.MaterialInfo material = quad.materialInfo();
-            RenderType renderType = material.itemRenderType();
-            int tint = material.isTinted() && material.tintIndex() >= 0 && material.tintIndex() < submit.tintLayers().length
-                ? submit.tintLayers()[material.tintIndex()] : -1;
-            quadInstance.setColor(tint);
-            posed.pushPose();
-            posed.last().set(submit.pose());
-            GlobalsStorage.modelPartAnimator.applyPoses(index, posed);
-            this.getVertexBuilder(renderType).putBakedQuad(posed.last(), quad, quadInstance);
-            posed.popPose();
-            index++;
-        }
-        GlobalsStorage.modelPartAnimator.clear();
-        ci.cancel();
-    }
-}
-''',encoding='utf-8')
-          particle=root/'com/holdmylua/source/patricles/render/ParticleRenderLayers.java'
+                for (ItemFeatureRenderer.Submit submit : submits) {
+                   hmi$renderPass(submit, true, contexts.get(submit));
+                }
+
+                ci.cancel();
+             }
+
+             @Unique
+             private static boolean hmi$isFirstPersonHand(ItemFeatureRenderer.Submit submit) {
+                ItemDisplayContext type = submit.displayContext();
+                return (type == ItemDisplayContext.THIRD_PERSON_LEFT_HAND
+                      || type == ItemDisplayContext.THIRD_PERSON_RIGHT_HAND)
+                   && Minecraft.getInstance().options.getCameraType().isFirstPerson();
+             }
+
+             @Unique
+             private void hmi$renderPass(
+                ItemFeatureRenderer.Submit submit,
+                boolean foilPass,
+                @Nullable ItemModelContext context
+             ) {
+                boolean animated = context != null;
+                if (animated) {
+                   AbstractClientPlayer player = context.player != null
+                      ? context.player
+                      : Minecraft.getInstance().player;
+                   ItemStack item = context.item;
+                   ScriptHolder.itemModelCache.executeModel(
+                      context, item, player, GlobalsStorage.modelPartAnimator
+                   );
+                   for (ModelScriptCache cache : ScriptHolder.itemModelAddonsCache) {
+                      cache.executeModel(context, item, player, GlobalsStorage.modelPartAnimator);
+                   }
+                }
+
+                QuadInstance instance = new QuadInstance();
+                instance.setLightCoords(submit.lightCoords());
+                instance.setOverlayCoords(submit.overlayCoords());
+                PoseStack posed = new PoseStack();
+                int index = 0;
+
+                for (BakedQuad quad : submit.quads()) {
+                   BakedQuad.MaterialInfo material = quad.materialInfo();
+                   RenderType renderType = material.itemRenderType();
+
+                   posed.pushPose();
+                   posed.last().set(submit.pose());
+                   if (animated) {
+                      GlobalsStorage.modelPartAnimator.applyPoses(index, posed);
+                   }
+                   PoseStack.Pose pose = posed.last();
+
+                   if (foilPass) {
+                      if (submit.foilType() != FoilType.NONE) {
+                         instance.setColor(-1);
+                         VertexConsumer buffer = this.getVertexBuilder(hmi$getFoilRenderType(renderType));
+                         if (submit.foilType() == FoilType.SPECIAL) {
+                            buffer = new SheetedDecalTextureGenerator(
+                               buffer,
+                               hmi$computeFoilPose(submit.displayContext(), pose),
+                               0.0078125F
+                            );
+                         }
+                         buffer.putBakedQuad(pose, quad, instance);
+                      }
+                   } else if (submit.outlineColor() != 0) {
+                      RenderType outline = renderType.outline().orElse(null);
+                      if (outline != null) {
+                         instance.setColor(submit.outlineColor());
+                         this.getVertexBuilder(outline).putBakedQuad(pose, quad, instance);
+                      }
+                   } else {
+                      int tint = material.isTinted()
+                         && material.tintIndex() >= 0
+                         && material.tintIndex() < submit.tintLayers().length
+                         ? submit.tintLayers()[material.tintIndex()]
+                         : -1;
+                      instance.setColor(tint);
+                      this.getVertexBuilder(renderType).putBakedQuad(pose, quad, instance);
+                   }
+
+                   posed.popPose();
+                   index++;
+                }
+
+                if (animated) {
+                   GlobalsStorage.modelPartAnimator.clear();
+                }
+             }
+
+             @Unique
+             private static RenderType hmi$getFoilRenderType(RenderType renderType) {
+                boolean transparent = Minecraft.getInstance()
+                   .gameRenderer
+                   .gameRenderState()
+                   .useShaderTransparency()
+                   && renderType.outputTarget() == OutputTarget.ITEM_ENTITY_TARGET;
+                return transparent ? RenderTypes.glintTranslucent() : RenderTypes.glint();
+             }
+
+             @Unique
+             private static PoseStack.Pose hmi$computeFoilPose(
+                ItemDisplayContext type,
+                PoseStack.Pose pose
+             ) {
+                PoseStack.Pose result = pose.copy();
+                if (type == ItemDisplayContext.GUI) {
+                   MatrixUtil.mulComponentWise(result.pose(), 0.5F);
+                } else if (type.firstPerson()) {
+                   MatrixUtil.mulComponentWise(result.pose(), 0.75F);
+                }
+                return result;
+             }
+          }
+          ''', encoding='utf-8')
+
+          particle = root / 'com/holdmylua/source/patricles/render/ParticleRenderLayers.java'
           particle.write_text(r'''package com.holdmylua.source.patricles.render;
 
-import com.holdmylua.source.mixin.render.RenderTypeInvoker;
-import com.mojang.blaze3d.pipeline.BlendFunction;
-import com.mojang.blaze3d.pipeline.ColorTargetState;
-import com.mojang.blaze3d.pipeline.DepthStencilState;
-import com.mojang.blaze3d.pipeline.RenderPipeline;
-import com.mojang.blaze3d.platform.BlendFactor;
-import com.mojang.blaze3d.platform.CompareOp;
-import java.util.function.Function;
-import net.minecraft.client.renderer.RenderPipelines;
-import net.minecraft.client.renderer.rendertype.RenderSetup;
-import net.minecraft.client.renderer.rendertype.RenderType;
-import net.minecraft.resources.Identifier;
-import net.minecraft.util.Util;
+          import com.holdmylua.source.mixin.render.RenderTypeInvoker;
+          import com.mojang.blaze3d.pipeline.BlendFunction;
+          import com.mojang.blaze3d.pipeline.ColorTargetState;
+          import com.mojang.blaze3d.pipeline.DepthStencilState;
+          import com.mojang.blaze3d.pipeline.RenderPipeline;
+          import com.mojang.blaze3d.platform.CompareOp;
+          import java.util.function.Function;
+          import net.minecraft.client.renderer.RenderPipelines;
+          import net.minecraft.client.renderer.rendertype.RenderSetup;
+          import net.minecraft.client.renderer.rendertype.RenderType;
+          import net.minecraft.resources.Identifier;
+          import net.minecraft.util.Util;
 
-public class ParticleRenderLayers {
-    static BlendFunction ADDITIVE = new BlendFunction(BlendFactor.SRC_ALPHA, BlendFactor.ONE);
-    static RenderPipeline ADDITIVE_PARTICLE = RenderPipelines.register(
-        RenderPipeline.builder(RenderPipelines.GUI_TEXTURED_SNIPPET)
-            .withLocation("pipeline/additive_particle_effect")
-            .withColorTargetState(new ColorTargetState(ADDITIVE))
-            .withDepthStencilState(new DepthStencilState(CompareOp.ALWAYS_PASS, false))
-            .build()
-    );
-    private static final Function<Identifier, RenderType> ADDITIVE_PARTICLE_LAYER = Util.memoize(
-        texture -> RenderTypeInvoker.hmi$create(
-            "fire_screen_effect", RenderSetup.builder(ADDITIVE_PARTICLE).withTexture("Sampler0", texture).createRenderSetup()
-        )
-    );
+          public class ParticleRenderLayers {
+             static final RenderPipeline ADDITIVE_PARTICLE = RenderPipelines.register(
+                RenderPipeline.builder(RenderPipelines.GUI_TEXTURED_SNIPPET)
+                   .withLocation("pipeline/additive_particle_effect")
+                   .withColorTargetState(new ColorTargetState(BlendFunction.LIGHTNING))
+                   .withDepthStencilState(new DepthStencilState(CompareOp.ALWAYS_PASS, false))
+                   .build()
+             );
 
-    public static RenderType additiveParticle(Identifier texture) {
-        return ADDITIVE_PARTICLE_LAYER.apply(texture);
-    }
-}
-''',encoding='utf-8')
+             private static final Function<Identifier, RenderType> ADDITIVE_PARTICLE_LAYER = Util.memoize(
+                texture -> RenderTypeInvoker.hmi$create(
+                   "hmi_additive_particle",
+                   RenderSetup.builder(ADDITIVE_PARTICLE)
+                      .withTexture("Sampler0", texture)
+                      .createRenderSetup()
+                )
+             );
+
+             public static RenderType additiveParticle(Identifier texture) {
+                return ADDITIVE_PARTICLE_LAYER.apply(texture);
+             }
+          }
+          ''', encoding='utf-8')
           PY
+
       - name: Build
         working-directory: hmi-source/mod
         shell: bash
@@ -154,7 +269,9 @@ public class ParticleRenderLayers {
           chmod +x gradlew
           ./gradlew clean build --stacktrace --console=plain
           ls -lah build/libs
-      - uses: actions/upload-artifact@v4
+
+      - name: Upload JAR
+        uses: actions/upload-artifact@v4
         with:
           name: holdmyitems-5.1.1-mc26.2
           path: hmi-source/mod/build/libs/*.jar
