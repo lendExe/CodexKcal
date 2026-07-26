@@ -1,4 +1,4 @@
-name: Inspect HMI 26.2 APIs
+name: Inspect HMI 26.2 Render APIs
 
 on:
   pull_request:
@@ -26,47 +26,48 @@ jobs:
           sed -i 's/^loom_version=.*/loom_version=1.17.17/' hmi-source/mod/gradle.properties
           sed -i 's/^fabric_api_version=.*/fabric_api_version=0.154.2+26.2/' hmi-source/mod/gradle.properties
           sed -i 's#^distributionUrl=.*#distributionUrl=https\\://services.gradle.org/distributions-snapshots/gradle-9.5.1-20260510022507+0000-bin.zip#' hmi-source/mod/gradle/wrapper/gradle-wrapper.properties
-      - name: Generate and inspect Minecraft sources
+      - name: Generate focused render API report
         working-directory: hmi-source/mod
         shell: bash
         run: |
           chmod +x gradlew
           ./gradlew genSources --console=plain
           python3 - <<'PY'
-          import os, zipfile
-          roots=['.', os.path.expanduser('~/.gradle')]
-          tokens=['MultiBufferSource','OutlineBufferSource','ItemSubmit','getFoilRenderType','mainCamera','toastManager','SourceFactor','DestFactor','withUniform','VertexFormat.Mode']
+          import os, zipfile, re
           out=[]
-          seen=set()
-          for root in roots:
-              for base, _, files in os.walk(root):
-                  for fn in files:
-                      p=os.path.join(base,fn)
-                      if fn.endswith('.java'):
-                          try:
-                              txt=open(p,encoding='utf-8',errors='ignore').read()
-                          except Exception: continue
-                          if any(t in txt for t in tokens):
-                              key=('file',p)
-                              if key not in seen:
-                                  seen.add(key); out.append('\n===== '+p+' =====\n'+txt)
-                      elif fn.endswith(('.jar','.zip')) and ('source' in fn.lower() or 'minecraft' in p.lower()):
-                          try:
-                              with zipfile.ZipFile(p) as z:
-                                  for n in z.namelist():
-                                      if not n.endswith('.java'): continue
-                                      txt=z.read(n).decode('utf-8','ignore')
-                                      if any(t in txt for t in tokens):
-                                          key=(p,n)
-                                          if key not in seen:
-                                              seen.add(key); out.append('\n===== '+p+' :: '+n+' =====\n'+txt)
-                          except Exception: pass
-          open('../../hmi-api-report.txt','w',encoding='utf-8').write('\n'.join(out))
-          print('matched entries:',len(out))
+          patterns=[
+            r'BufferSource', r'Outline', r'ItemFeatureRenderer', r'ItemSubmit',
+            r'SubmitNodeStorage', r'BlendFunction', r'RenderPipeline',
+            r'VertexFormat', r'RenderType', r'Foil'
+          ]
+          content_tokens=['BufferSource','outlineColor','foilType','foil','ItemSubmit','SubmitNode','BlendFunction','withBindGroup','BindGroupLayouts','VertexFormat.Mode','DrawMode']
+          for root in ['.', os.path.expanduser('~/.gradle')]:
+            for base, _, files in os.walk(root):
+              for fn in files:
+                p=os.path.join(base,fn)
+                if not fn.endswith(('.jar','.zip')) or ('source' not in fn.lower() and 'minecraft' not in p.lower()):
+                  continue
+                try:
+                  with zipfile.ZipFile(p) as z:
+                    names=[n for n in z.namelist() if n.endswith('.java')]
+                    chosen=[]
+                    for n in names:
+                      name_hit=any(re.search(x,n,re.I) for x in patterns)
+                      if name_hit:
+                        chosen.append(n); continue
+                      txt=z.read(n).decode('utf-8','ignore')
+                      if any(tok in txt for tok in content_tokens): chosen.append(n)
+                    for n in sorted(set(chosen)):
+                      txt=z.read(n).decode('utf-8','ignore')
+                      out.append(f'\n===== {p} :: {n} =====\n{txt}')
+                except Exception:
+                  pass
+          open('../../hmi-render-api-report.txt','w',encoding='utf-8').write('\n'.join(out))
+          print('entries',len(out))
           PY
-      - name: Upload API report
+      - name: Upload render API report
         uses: actions/upload-artifact@v4
         with:
-          name: hmi-26.2-api-report
-          path: hmi-api-report.txt
+          name: hmi-26.2-render-api-report
+          path: hmi-render-api-report.txt
           if-no-files-found: error
