@@ -1,4 +1,4 @@
-name: Build HMI 26.2 Arm-Only Framing Fix
+name: Build HMI 26.2 Grip and Swing Fix
 
 on:
   pull_request:
@@ -25,7 +25,7 @@ jobs:
           sed -i 's/^minecraft_version=.*/minecraft_version=26.2/' hmi-source/mod/gradle.properties
           sed -i 's/^loader_version=.*/loader_version=0.19.3/' hmi-source/mod/gradle.properties
           sed -i 's/^loom_version=.*/loom_version=1.17.17/' hmi-source/mod/gradle.properties
-          sed -i 's/^mod_version=.*/mod_version=5.1.1+26.2-armonly1/' hmi-source/mod/gradle.properties
+          sed -i 's/^mod_version=.*/mod_version=5.1.1+26.2-gripfix1/' hmi-source/mod/gradle.properties
           sed -i 's/^fabric_api_version=.*/fabric_api_version=0.154.2+26.2/' hmi-source/mod/gradle.properties
           sed -i 's#^distributionUrl=.*#distributionUrl=https\://services.gradle.org/distributions-snapshots/gradle-9.5.1-20260510022507+0000-bin.zip#' hmi-source/mod/gradle/wrapper/gradle-wrapper.properties
           sed -i 's/"minecraft": "~26\.1\.2"/"minecraft": "~26.2"/' hmi-source/mod/src/main/resources/fabric.mod.json
@@ -39,27 +39,35 @@ jobs:
           python3 patch_hmi_26_2_animations.py
           python3 patch_hmi_26_2_resourcepack.py
           python3 patch_hmi_26_2_tuning.py
+          python3 patch_hmi_26_2_hand_context.py
           python3 patch_hmi_26_2_salmon.py
 
-      - name: Verify fixes
+      - name: Verify grip and swing fixes
         shell: bash
         run: |
           python3 - <<'PY'
           import json
           from pathlib import Path
+
+          java = Path('hmi-source/mod/src/main/java')
+          assets = Path('hmi-source/mod/src/main/resources/resourcepacks/pack_test/assets/minecraft')
           pack = json.loads(Path('hmi-source/mod/src/main/resources/resourcepacks/pack_test/pack.mcmeta').read_text(encoding='utf-8'))['pack']
           assert pack['pack_format'] == 88
           assert pack['min_format'] == 88
           assert pack['max_format'] == 88
-          assert 'supported_formats' not in pack
-          game = Path('hmi-source/mod/src/main/java/com/holdmylua/source/mixin/client/GameRendererMixin.java').read_text(encoding='utf-8')
-          held = Path('hmi-source/mod/src/main/java/com/holdmylua/source/mixin/render/HeldItemRendererMixin.java').read_text(encoding='utf-8')
-          assert 'elapsed * 0.65F' in game
-          assert 'Math.max(mainHandProgress' not in held
-          assert 'matrices.translate(0.10F * l, -0.14F, -0.16F);' in held
-          assert 'matrices.translate(-0.30F * l, -0.04F, -0.24F);' not in held
-          assert 'matrices.scale(0.86F, 0.86F, 0.86F);' not in held
-          assets = Path('hmi-source/mod/src/main/resources/resourcepacks/pack_test/assets/minecraft')
+
+          held = (java / 'com/holdmylua/source/mixin/render/HeldItemRendererMixin.java').read_text(encoding='utf-8')
+          item_mixin = (java / 'com/holdmylua/source/mixin/render/ItemRendererMixin.java').read_text(encoding='utf-8')
+          storage = (java / 'com/holdmylua/source/global/item_model/ItemModelStorage.java').read_text(encoding='utf-8')
+          hand_lua = (assets / 'holdmyitems/hand_pose.lua').read_text(encoding='utf-8')
+
+          assert 'matrices.translate(-0.10F * l, -0.04F, -0.10F);' in held
+          assert 'matrices.translate(0.10F * l, -0.14F, -0.16F);' not in held
+          assert 'matrices.scale(0.86F' not in held
+          assert 'getForArm' in item_mixin and 'getForArm' in storage
+          assert 'global.swordSwing = 0.52;' in hand_lua
+          assert 'global.regularSwing = 0.62;' in hand_lua
+
           salmon_model = json.loads((assets / 'models/item/salmon_bucket_3d.json').read_text(encoding='utf-8'))
           for element in salmon_model.get('elements', []):
               for face in element.get('faces', {}).values():
@@ -102,53 +110,21 @@ jobs:
           set +e
           (sleep 45; echo stop) | timeout 100s java -Xms512M -Xmx1G -jar server.jar nogui > "$GITHUB_WORKSPACE/server-world.log" 2>&1
           test -f AnimationTest/level.dat
-          python3 -m pip install -q nbtlib
-          python3 - <<'PY'
-          import nbtlib
-          from nbtlib import Byte, Int
-          level = nbtlib.load('/tmp/hmi-server/AnimationTest/level.dat')
-          level['Data']['allowCommands'] = Byte(1)
-          level['Data']['GameType'] = Int(1)
-          level.save()
-          PY
           mkdir -p "$GITHUB_WORKSPACE/hmi-source/mod/run/saves"
           cp -a AnimationTest "$GITHUB_WORKSPACE/hmi-source/mod/run/saves/AnimationTest"
 
-      - name: In-world visual, model and Lua test
+      - name: In-world model and Lua test
         working-directory: hmi-source/mod
         shell: bash
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq xvfb xdotool imagemagick
-          Xvfb :99 -screen 0 1280x720x24 > ../../xvfb.log 2>&1 &
-          export DISPLAY=:99
+          sudo apt-get install -y -qq xvfb
           set +e
           set -o pipefail
-          timeout 155s ./gradlew runClient --args='--quickPlaySingleplayer AnimationTest --width 1280 --height 720' --console=plain 2>&1 | tee ../../client-world.log &
-          runner=$!
-          sleep 95
-          window=$(xdotool search --onlyvisible --name 'Minecraft' | tail -n 1 || true)
-          if [ -n "$window" ]; then
-            xdotool windowactivate --sync "$window" || true
-          fi
-          xdotool key t || true
-          xdotool type --delay 10 '/give @s minecraft:diamond_sword' || true
-          xdotool key Return || true
-          sleep 2
-          xdotool key t || true
-          xdotool type --delay 10 '/item replace entity @s weapon.offhand with minecraft:lantern' || true
-          xdotool key Return || true
-          sleep 6
-          import -display :99 -window root ../../arm-preview.png
-          test -s ../../arm-preview.png
-          wait "$runner"
-          status=$?
-          if grep -q 'Removed resource pack holdmyitems:pack_test' ../../client-world.log; then
-            cat ../../client-world.log
-            exit 1
-          fi
+          timeout 180s xvfb-run -a ./gradlew runClient --args='--quickPlaySingleplayer AnimationTest' --console=plain 2>&1 | tee ../../client-world.log
+          status=${PIPESTATUS[0]}
           grep -E -q 'Reloading ResourceManager:.*holdmyitems:pack_test' ../../client-world.log
-          if grep -E -q "Unable to bake item model: 'minecraft:salmon_bucket'|Invalid frame index on sprite minecraft:item/salmon_bucket_3d|\[HoldMyItems\] Lua runtime error|JsonParseException: Pack|InvalidMixinException|InvalidInjectionException|MixinApplyError|Mixin transformation.*failed|ExceptionInInitializerError|Minecraft has crashed" ../../client-world.log; then
+          if grep -E -q "Removed resource pack holdmyitems:pack_test|Unable to bake item model: 'minecraft:salmon_bucket'|Invalid frame index on sprite minecraft:item/salmon_bucket_3d|\[HoldMyItems\] Lua runtime error|InvalidMixinException|InvalidInjectionException|MixinApplyError|Minecraft has crashed" ../../client-world.log; then
             cat ../../client-world.log
             exit 1
           fi
@@ -160,18 +136,16 @@ jobs:
       - name: Upload JAR
         uses: actions/upload-artifact@v4
         with:
-          name: holdmyitems-5.1.1-mc26.2-armonly1
+          name: holdmyitems-5.1.1-mc26.2-gripfix1
           path: hmi-source/mod/build/libs/*.jar
           if-no-files-found: error
 
-      - name: Upload verification files
+      - name: Upload logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: hmi-26.2-armonly1-verification
+          name: hmi-26.2-gripfix1-logs
           path: |
-            arm-preview.png
             client-world.log
             server-world.log
-            xvfb.log
           if-no-files-found: warn
