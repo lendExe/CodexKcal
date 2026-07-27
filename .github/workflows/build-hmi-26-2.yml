@@ -47,14 +47,11 @@ jobs:
           python3 - <<'PY'
           import json
           from pathlib import Path
-
-          pack_path = Path('hmi-source/mod/src/main/resources/resourcepacks/pack_test/pack.mcmeta')
-          pack = json.loads(pack_path.read_text(encoding='utf-8'))['pack']
+          pack = json.loads(Path('hmi-source/mod/src/main/resources/resourcepacks/pack_test/pack.mcmeta').read_text(encoding='utf-8'))['pack']
           assert pack['pack_format'] == 88
           assert pack['min_format'] == 88
           assert pack['max_format'] == 88
           assert 'supported_formats' not in pack
-
           game = Path('hmi-source/mod/src/main/java/com/holdmylua/source/mixin/client/GameRendererMixin.java').read_text(encoding='utf-8')
           held = Path('hmi-source/mod/src/main/java/com/holdmylua/source/mixin/render/HeldItemRendererMixin.java').read_text(encoding='utf-8')
           assert 'elapsed * 0.65F' in game
@@ -62,7 +59,6 @@ jobs:
           assert 'matrices.translate(0.10F * l, -0.14F, -0.16F);' in held
           assert 'matrices.translate(-0.30F * l, -0.04F, -0.24F);' not in held
           assert 'matrices.scale(0.86F, 0.86F, 0.86F);' not in held
-
           assets = Path('hmi-source/mod/src/main/resources/resourcepacks/pack_test/assets/minecraft')
           salmon_model = json.loads((assets / 'models/item/salmon_bucket_3d.json').read_text(encoding='utf-8'))
           for element in salmon_model.get('elements', []):
@@ -84,8 +80,7 @@ jobs:
           python3 - <<'PY'
           import json
           import urllib.request
-          manifest_url = 'https://piston-meta.mojang.com/mc/game/version_manifest_v2.json'
-          with urllib.request.urlopen(manifest_url) as response:
+          with urllib.request.urlopen('https://piston-meta.mojang.com/mc/game/version_manifest_v2.json') as response:
               manifest = json.load(response)
           entry = next(v for v in manifest['versions'] if v['id'] == '26.2')
           with urllib.request.urlopen(entry['url']) as response:
@@ -132,19 +127,20 @@ jobs:
           timeout 155s ./gradlew runClient --args='--quickPlaySingleplayer AnimationTest --width 1280 --height 720' --console=plain 2>&1 | tee ../../client-world.log &
           runner=$!
           sleep 95
-          window=$(xdotool search --name 'Minecraft' | tail -n 1)
+          window=$(xdotool search --onlyvisible --name 'Minecraft' | tail -n 1 || true)
           if [ -n "$window" ]; then
-            xdotool windowactivate --sync "$window"
-            xdotool key t
-            xdotool type --delay 10 '/give @s minecraft:diamond_sword'
-            xdotool key Return
-            sleep 2
-            xdotool key t
-            xdotool type --delay 10 '/item replace entity @s weapon.offhand with minecraft:lantern'
-            xdotool key Return
-            sleep 5
-            import -display :99 -window "$window" ../../arm-preview.png || true
+            xdotool windowactivate --sync "$window" || true
           fi
+          xdotool key t || true
+          xdotool type --delay 10 '/give @s minecraft:diamond_sword' || true
+          xdotool key Return || true
+          sleep 2
+          xdotool key t || true
+          xdotool type --delay 10 '/item replace entity @s weapon.offhand with minecraft:lantern' || true
+          xdotool key Return || true
+          sleep 6
+          import -display :99 -window root ../../arm-preview.png
+          test -s ../../arm-preview.png
           wait "$runner"
           status=$?
           if grep -q 'Removed resource pack holdmyitems:pack_test' ../../client-world.log; then
