@@ -1,0 +1,184 @@
+name: Build HMI 26.2 Empty-Hand Fix
+
+on:
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: ByteMe6/HMI-26.1.2
+          path: hmi-source
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - name: Configure Minecraft 26.2
+        shell: bash
+        run: |
+          sed -i 's/^minecraft_version=.*/minecraft_version=26.2/' hmi-source/mod/gradle.properties
+          sed -i 's/^loader_version=.*/loader_version=0.19.3/' hmi-source/mod/gradle.properties
+          sed -i 's/^loom_version=.*/loom_version=1.17.17/' hmi-source/mod/gradle.properties
+          sed -i 's/^mod_version=.*/mod_version=5.1.1+26.2-emptyhand1/' hmi-source/mod/gradle.properties
+          sed -i 's/^fabric_api_version=.*/fabric_api_version=0.154.2+26.2/' hmi-source/mod/gradle.properties
+          sed -i 's#^distributionUrl=.*#distributionUrl=https\://services.gradle.org/distributions-snapshots/gradle-9.5.1-20260510022507+0000-bin.zip#' hmi-source/mod/gradle/wrapper/gradle-wrapper.properties
+          sed -i 's/"minecraft": "~26\.1\.2"/"minecraft": "~26.2"/' hmi-source/mod/src/main/resources/fabric.mod.json
+
+      - name: Apply Minecraft 26.2 fixes
+        run: |
+          python3 patch_hmi_26_2.py
+          python3 patch_hmi_26_2_redirects.py
+          python3 patch_hmi_26_2_camera.py
+          python3 patch_hmi_26_2_mixins.py
+          python3 patch_hmi_26_2_animations.py
+          python3 patch_hmi_26_2_resourcepack.py
+          python3 patch_hmi_26_2_tuning.py
+          python3 patch_hmi_26_2_hand_context.py
+          python3 patch_hmi_26_2_empty_hand.py
+          python3 patch_hmi_26_2_salmon.py
+
+      - name: Verify empty-hand-only fix
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          java = Path('hmi-source/mod/src/main/java')
+          assets = Path('hmi-source/mod/src/main/resources/resourcepacks/pack_test/assets/minecraft')
+          pack = json.loads(Path('hmi-source/mod/src/main/resources/resourcepacks/pack_test/pack.mcmeta').read_text(encoding='utf-8'))['pack']
+          assert pack['pack_format'] == 88
+          assert pack['min_format'] == 88
+          assert pack['max_format'] == 88
+
+          held = (java / 'com/holdmylua/source/mixin/render/HeldItemRendererMixin.java').read_text(encoding='utf-8')
+          item_mixin = (java / 'com/holdmylua/source/mixin/render/ItemRendererMixin.java').read_text(encoding='utf-8')
+          storage = (java / 'com/holdmylua/source/global/item_model/ItemModelStorage.java').read_text(encoding='utf-8')
+          hand_lua = (assets / 'holdmyitems/hand_pose.lua').read_text(encoding='utf-8')
+
+          # Preserve the working held-item grip/context fixes.
+          assert 'matrices.translate(-0.10F * l, -0.04F, -0.10F);' in held
+          assert 'getForArm' in item_mixin and 'getForArm' in storage
+          assert 'global.swordSwing = 0.52;' in hand_lua
+
+          # New correction must affect only the empty-hand branch.
+          assert 'local emptySwingScale = (context.blockBreaking and 0.30) or 0.46' in hand_lua
+          assert hand_lua.count('emptySwingScale') >= 14
+          assert '0.33 * swing + 0.05 * swing_rot + 0.14 * swingRise) * emptySwingScale' in hand_lua
+          assert 'M:rotateZ(mat, 20 * l * swing * emptySwingScale' in hand_lua
+
+          salmon_model = json.loads((assets / 'models/item/salmon_bucket_3d.json').read_text(encoding='utf-8'))
+          for element in salmon_model.get('elements', []):
+              for face in element.get('faces', {}).values():
+                  assert all(value >= 0 for value in face.get('uv', [])), face
+          PY
+
+      - name: Build
+        working-directory: hmi-source/mod
+        run: |
+          chmod +x gradlew
+          ./gradlew clean build --stacktrace --console=plain
+
+      - name: Generate vanilla 26.2 test world
+        shell: bash
+        run: |
+          mkdir -p /tmp/hmi-server
+          python3 - <<'PY'
+          import json
+          import urllib.request
+          with urllib.request.urlopen('https://piston-meta.mojang.com/mc/game/version_manifest_v2.json') as response:
+              manifest = json.load(response)
+          entry = next(v for v in manifest['versions'] if v['id'] == '26.2')
+          with urllib.request.urlopen(entry['url']) as response:
+              metadata = json.load(response)
+          urllib.request.urlretrieve(metadata['downloads']['server']['url'], '/tmp/hmi-server/server.jar')
+          PY
+          cd /tmp/hmi-server
+          printf 'eula=true\n' > eula.txt
+          cat > server.properties <<'EOF'
+          level-name=AnimationTest
+          online-mode=false
+          spawn-protection=0
+          view-distance=4
+          simulation-distance=4
+          max-players=1
+          gamemode=creative
+          force-gamemode=true
+          EOF
+          set +e
+          (sleep 45; echo stop) | timeout 100s java -Xms512M -Xmx1G -jar server.jar nogui > "$GITHUB_WORKSPACE/server-world.log" 2>&1
+          test -f AnimationTest/level.dat
+          python3 -m pip install -q nbtlib
+          python3 - <<'PY'
+          import nbtlib
+          from nbtlib import Byte, Int
+          level = nbtlib.load('/tmp/hmi-server/AnimationTest/level.dat')
+          level['Data']['allowCommands'] = Byte(1)
+          level['Data']['GameType'] = Int(1)
+          level.save()
+          PY
+          mkdir -p "$GITHUB_WORKSPACE/hmi-source/mod/run/saves"
+          cp -a AnimationTest "$GITHUB_WORKSPACE/hmi-source/mod/run/saves/AnimationTest"
+
+      - name: In-world empty-hand test
+        working-directory: hmi-source/mod
+        shell: bash
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq xvfb xdotool imagemagick
+          Xvfb :99 -screen 0 1280x720x24 > ../../xvfb.log 2>&1 &
+          export DISPLAY=:99
+          set +e
+          set -o pipefail
+          timeout 155s ./gradlew runClient --args='--quickPlaySingleplayer AnimationTest --width 1280 --height 720' --console=plain 2>&1 | tee ../../client-world.log &
+          runner=$!
+          sleep 95
+          window=$(xdotool search --onlyvisible --name 'Minecraft' | tail -n 1 || true)
+          if [ -n "$window" ]; then
+            xdotool windowactivate --sync "$window" || true
+          fi
+          xdotool key t || true
+          xdotool type --delay 10 '/clear @s' || true
+          xdotool key Return || true
+          sleep 3
+          xdotool mousedown 1 || true
+          sleep 0.28
+          import -display :99 -window root ../../empty-hand-preview.png
+          xdotool mouseup 1 || true
+          test -s ../../empty-hand-preview.png
+          wait "$runner"
+          status=$?
+          grep -E -q 'Reloading ResourceManager:.*holdmyitems:pack_test' ../../client-world.log
+          if grep -E -q "Removed resource pack holdmyitems:pack_test|Unable to bake item model: 'minecraft:salmon_bucket'|Invalid frame index on sprite minecraft:item/salmon_bucket_3d|\[HoldMyItems\] Lua runtime error|InvalidMixinException|InvalidInjectionException|MixinApplyError|Minecraft has crashed" ../../client-world.log; then
+            cat ../../client-world.log
+            exit 1
+          fi
+          if [ "$status" -ne 0 ] && [ "$status" -ne 124 ]; then
+            cat ../../client-world.log
+            exit "$status"
+          fi
+
+      - name: Upload JAR
+        uses: actions/upload-artifact@v4
+        with:
+          name: holdmyitems-5.1.1-mc26.2-emptyhand1
+          path: hmi-source/mod/build/libs/*.jar
+          if-no-files-found: error
+
+      - name: Upload verification files
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hmi-26.2-emptyhand1-verification
+          path: |
+            empty-hand-preview.png
+            client-world.log
+            server-world.log
+            xvfb.log
+          if-no-files-found: warn
