@@ -3,7 +3,7 @@ import re
 
 root = Path('hmi-source/mod/src/main/java')
 
-# Keep the slower timing that already feels better on Minecraft 26.2.
+# Keep animations slower than the raw 26.2 timing.
 game_renderer = root / 'com/holdmylua/source/mixin/client/GameRendererMixin.java'
 text = game_renderer.read_text(encoding='utf-8')
 text, count = re.subn(
@@ -19,7 +19,7 @@ game_renderer.write_text(text, encoding='utf-8')
 held = root / 'com/holdmylua/source/mixin/render/HeldItemRendererMixin.java'
 text = held.read_text(encoding='utf-8')
 
-# Remove the vanilla-progress fallback. It made the HMI attack snap too fast.
+# Remove the vanilla-progress fallback that made attacks snap too fast.
 custom_swing = '''float mainHandProgress = accessor.hMI5_0$getMainHandSwingProgress(tickProgress);
              this.mainHandSwingProgress = mainHandProgress;
              float offHandProgress = accessor.hMI5_0$getOffHandSwingProgress(tickProgress);
@@ -45,28 +45,34 @@ if match:
 elif 'Math.max(mainHandProgress' in text or 'vanillaSwingProgress' in text:
     raise RuntimeError('Fast swing fallback exists but did not match safely')
 
-# Remove a previous framing correction if this script is applied repeatedly.
+# Remove every previous global framing experiment. Those affected both the arm
+# and the held item and made the hands move toward the centre of the camera.
 text = re.sub(
-    r'\s*matrices\.translate\(-0\.(?:14|30)F \* l,\s*-?0\.0[34]F,\s*-0\.(?:10|24)F\);\s*'
-    r'(?:matrices\.scale\(0\.86F,\s*0\.86F,\s*0\.86F\);\s*)?',
-    '\n',
+    r'^[ \t]*matrices\.translate\(-0\.(?:14|30)F \* l,\s*-?0\.0[34]F,\s*-0\.(?:10|24|28)F\);\s*\n'
+    r'(?:^[ \t]*matrices\.scale\(0\.86F,\s*0\.86F,\s*0\.86F\);\s*\n)?',
+    '',
     text,
     count=1,
+    flags=re.M,
 )
 
-# Stronger 26.2 first-person framing: pull both hands toward the centre,
-# slightly down and farther away, then reduce the complete arm/item scene.
+# Apply a conservative correction ONLY to the player-arm branch. The held item
+# keeps the original HMI matrices. Positive X*l sends each arm toward its own
+# screen edge; negative Y/Z moves the arm lower and farther from the camera.
 scene_start = text.find('this.scenePoseMain(')
 if scene_start < 0:
     raise RuntimeError('scenePoseMain call not found')
-next_push = text.find('matrices.pushPose();', scene_start)
-if next_push < 0:
-    raise RuntimeError('Pose push after scenePoseMain not found')
-line_start = text.rfind('\n', 0, next_push) + 1
-indent = text[line_start:next_push]
-correction = (
-    f'{indent}matrices.translate(-0.30F * l, -0.04F, -0.24F);\n'
-    f'{indent}matrices.scale(0.86F, 0.86F, 0.86F);\n'
-)
-text = text[:line_start] + correction + text[line_start:]
+arm_pose = text.find('this.mainHandPose(', scene_start)
+if arm_pose < 0:
+    raise RuntimeError('mainHandPose call not found')
+arm_push = text.rfind('matrices.pushPose();', scene_start, arm_pose)
+if arm_push < 0:
+    raise RuntimeError('Arm pose push not found')
+line_end = text.find('\n', arm_push)
+indent_start = text.rfind('\n', 0, arm_push) + 1
+indent = text[indent_start:arm_push]
+arm_correction = f'{indent}matrices.translate(0.10F * l, -0.14F, -0.16F);\n'
+if 'matrices.translate(0.10F * l, -0.14F, -0.16F);' not in text:
+    text = text[:line_end + 1] + arm_correction + text[line_end + 1:]
+
 held.write_text(text, encoding='utf-8')
